@@ -102,11 +102,22 @@ Prefer tools that express the full intent in one call:
 | Category | Key Tools |
 |----------|-----------|
 | Playback | `activate_playback`, `release_playback`, `go_playback`, `stop_playback`, `set_playback_level`, `jump_to_cue`, `change_page` |
-| Programmer | `select_group`, `select_heads`, `set_intensity`, `set_attribute`, `clear_programmer` |
+| Live look (no record) | `apply_look` — groups/palettes by number or registry name |
+| Programmer | `select_group`, `select_heads`, `select_all_heads`, `set_intensity`, `set_attribute`, `clear_programmer` |
 | Record | `record_cue`, `record_colour_palette`, `record_position_palette`, `record_beam_palette` |
 | Include | `include_cue`, `include_colour_palette`, `include_position_palette`, `include_beam_palette` |
 | Fixture | `locate_heads`, `lamp_on`, `lamp_off`, `reset_heads` |
-| Registry | `list_palettes`, `declare_palette`, `import_palettes_csv` |
+| Registry | `list_palettes`, `declare_palette` (also `type: "group"`), `import_palettes_csv` |
+| Feedback | `get_feedback` (needs `MAGICQ_FEEDBACK_PORT` + MagicQ OSC tx) |
 | Resource | `palettes://registry` (MCP resource — read at session start) |
 | Reference | `attribute_list` (prints all attribute numbers) |
 | Escape hatch | `send_raw_command` |
+
+## Gotchas
+
+- `all_heads` (32H) is MagicQ's "All" key: it only re-selects within the current selection, so after `clear_programmer` it selects nothing. Use `select_all_heads` (head range 1..MAGICQ_MAX_HEAD).
+- Including a palette (`11,nH` etc.) applies it to every head stored in the palette, ignoring the selection. For per-group colour set attributes on the selection: 16/17/18 = Cyan/Magenta/Yellow, 0–255 (red = 0,255,255) — `apply_look` `rgb` does this.
+- Deselect (`3H`, `2,a,bH`) had no visible effect; start each look from `clear_programmer` and select groups (`4,nH`), which works.
+- MagicQ PC ignores CREP whose source IP is its own. On the same machine give MagicQ its own IP and send from another local IP (`MAGICQ_LOCAL_IP`).
+- Head numbers are MagicQ patch head numbers, not visualiser fixture IDs — prefer groups.
+- Tool results only confirm the packet was sent, not that MagicQ acted on it. Verify on the console, via `get_feedback`, or in the visualiser.

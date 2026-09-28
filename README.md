@@ -33,8 +33,10 @@ Set environment variables before running:
 |----------|---------|-------------|
 | `MAGICQ_IP` | `255.255.255.255` | Console IP address (or broadcast) |
 | `MAGICQ_PORT` | `6553` | CREP port |
-| `MAGICQ_TRANSPORT` | `udp` | `udp` or `tcp` |
+| `MAGICQ_TRANSPORT` | `udp` | `udp`, `tcp` or `osc` (OSC `/rpc` wrapper — needed for MagicQ PC on the same machine) |
 | `MAGICQ_CMD_DELAY_MS` | `75` | Delay between chained commands (ms) |
+| `MAGICQ_FEEDBACK_PORT` | *(off)* | UDP port to receive MagicQ OSC/CREP transmit on; read it with `get_feedback` |
+| `MAGICQ_MAX_HEAD` | `6145` | Upper head number used by `select_all_heads` |
 
 For production use, set `MAGICQ_IP` to the console's actual IP address and consider `MAGICQ_TRANSPORT=tcp` for reliability.
 

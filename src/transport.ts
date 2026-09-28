@@ -1,13 +1,16 @@
 import * as dgram from "dgram";
 import * as net from "net";
 
-export type TransportMode = "udp" | "tcp";
+export type TransportMode = "udp" | "tcp" | "osc";
 
 export interface MagicQConfig {
   ip: string;
   port: number;
   mode: TransportMode;
   commandDelayMs: number;
+  // Local address to send from. MagicQ PC ignores CREP whose source IP equals
+  // its own, so on the same machine give MagicQ one IP and send from another.
+  localIp?: string;
 }
 
 export function getConfig(): MagicQConfig {
@@ -16,14 +19,15 @@ export function getConfig(): MagicQConfig {
     port: parseInt(process.env.MAGICQ_PORT ?? "6553", 10),
     mode: (process.env.MAGICQ_TRANSPORT ?? "udp") as TransportMode,
     commandDelayMs: parseInt(process.env.MAGICQ_CMD_DELAY_MS ?? "75", 10),
+    localIp: process.env.MAGICQ_LOCAL_IP || undefined,
   };
 }
 
-function sendUdp(cmd: string, config: MagicQConfig): Promise<void> {
+function sendUdp(cmd: string | Buffer, config: MagicQConfig): Promise<void> {
   return new Promise((resolve, reject) => {
     const client = dgram.createSocket("udp4");
-    const buf = Buffer.from(cmd, "ascii");
-    client.bind(() => {
+    const buf = typeof cmd === "string" ? Buffer.from(cmd, "ascii") : cmd;
+    client.bind({ port: 0, address: config.localIp }, () => {
       client.setBroadcast(true);
       client.send(buf, config.port, config.ip, (err) => {
         client.close();
@@ -35,6 +39,20 @@ function sendUdp(cmd: string, config: MagicQConfig): Promise<void> {
       reject(err);
     });
   });
+}
+
+// OSC string: ASCII, null-terminated, padded to a multiple of 4 bytes.
+function oscString(s: string): Buffer {
+  const buf = Buffer.alloc(Math.ceil((Buffer.byteLength(s, "ascii") + 1) / 4) * 4);
+  buf.write(s, "ascii");
+  return buf;
+}
+
+// Wrap a CREP command in an OSC "/rpc" message. MagicQ PC ignores raw CREP
+// sent from the same machine, but accepts it via OSC (default port 8000).
+function sendOsc(cmd: string, config: MagicQConfig): Promise<void> {
+  const packet = Buffer.concat([oscString("/rpc"), oscString(",s"), oscString(cmd)]);
+  return sendUdp(packet, config);
 }
 
 function sendTcp(cmd: string, config: MagicQConfig): Promise<void> {
@@ -57,6 +75,8 @@ function sendTcp(cmd: string, config: MagicQConfig): Promise<void> {
 export async function sendCommand(cmd: string, config: MagicQConfig): Promise<void> {
   if (config.mode === "tcp") {
     await sendTcp(cmd, config);
+  } else if (config.mode === "osc") {
+    await sendOsc(cmd, config);
   } else {
     await sendUdp(cmd, config);
   }

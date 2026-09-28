@@ -9,12 +9,20 @@ import {
   upsertPalette,
   formatRegistry,
   defaultName,
-  type PaletteType,
+  resolveId,
+  type RegistryType,
 } from "./palette-registry.js";
 import { importCsv } from "./csv-import.js";
-import { StepSchema, executeSequence } from "./sequence.js";
+import { StepSchema, executeSequence, selectAllCommand } from "./sequence.js";
+import { startFeedbackListener, feedbackStatus, getLatest, getRecent } from "./feedback.js";
 
 const config = getConfig();
+
+const feedbackPort = process.env.MAGICQ_FEEDBACK_PORT;
+if (feedbackPort) startFeedbackListener(parseInt(feedbackPort, 10));
+
+// A palette/group reference: console number or registry name ("Red", "RivaleProf").
+const Ref = z.union([z.number().int().min(1), z.string().min(1)]);
 const server = new McpServer({ name: "magicq", version: "0.1.0" });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -224,7 +232,7 @@ server.tool(
 
 server.tool(
   "set_attribute",
-  "Set an attribute value on currently selected heads. Use the attribute number (see attribute_list tool for reference).",
+  "Set a raw attribute value on currently selected heads (see attribute_list). Values are 0–255. Colour mix 16/17/18 is Cyan/Magenta/Yellow (inverse of R/G/B), e.g. red = 16:0, 17:255, 18:255.",
   {
     attr: z.number().int().min(0).max(51).describe("Attribute number"),
     value: z.number().int().min(0).max(65535).describe("Attribute value"),
@@ -289,7 +297,7 @@ server.tool(
 
 server.tool(
   "include_colour_palette",
-  "Include a colour palette into the programmer.",
+  "Include a colour palette into the programmer. Applies the palette to EVERY head stored in it, regardless of the current selection.",
   {
     palette_id: z.number().int().min(1).max(1024).describe("Colour palette ID"),
   },
@@ -412,11 +420,21 @@ server.tool(
 
 server.tool(
   "all_heads",
-  "Select all heads (within current selection).",
+  "MagicQ 'All' key: re-selects all heads WITHIN the current selection (after next/prev head). Selects nothing when the selection is empty — use select_all_heads to select every fixture.",
   {},
   async () => {
     await sendCommand("32H", config);
-    return ok("All heads selected");
+    return ok("All (within current selection) sent — does nothing if no heads were selected");
+  }
+);
+
+server.tool(
+  "select_all_heads",
+  "Select every fixture in the show (head range 1..MAGICQ_MAX_HEAD, default 6145).",
+  {},
+  async () => {
+    await sendCommand(selectAllCommand(), config);
+    return ok(`Selected all heads (${selectAllCommand()})`);
   }
 );
 
@@ -522,11 +540,83 @@ server.tool(
   }
 );
 
+server.tool(
+  "apply_look",
+  [
+    "Put a look live in the programmer in ONE call, without recording a cue.",
+    "For a different colour per group use rgb (selected heads only) — colour palettes apply to all their heads.",
+    "Selects groups (by number or registry name, e.g. \"RivaleProf\"), a head range, or all heads,",
+    "then includes colour/position/beam palettes (number or name, e.g. \"Red\") and sets intensity.",
+    "clear_first (default true) clears the programmer before; the look stays live until clear_programmer.",
+    "Several groups get the same look — call again with clear_first=false to layer a different look on other groups.",
+  ].join("\n"),
+  {
+    groups: z.array(Ref).optional().describe("Groups to select (numbers or names)"),
+    heads_start: z.number().int().min(1).max(6145).optional().describe("First head of a range (when no groups)"),
+    heads_end: z.number().int().min(1).max(6145).optional().describe("Last head of the range"),
+    all_heads: z.boolean().optional().describe("Select every fixture (when no groups / heads given)"),
+    colour: Ref.optional().describe("Colour palette number or name. NOTE: include applies the palette to EVERY head stored in it, not just the selection — use rgb for per-group colour"),
+    rgb: z.tuple([z.number().int().min(0).max(255), z.number().int().min(0).max(255), z.number().int().min(0).max(255)])
+      .optional().describe("Colour for the SELECTED heads only, as [r,g,b] 0–255 (sent as CMY attributes 16–18)"),
+    position: Ref.optional().describe("Position palette number or name"),
+    beam: Ref.optional().describe("Beam palette number or name"),
+    intensity: z.number().int().min(0).max(100).optional().describe("Intensity 0–100"),
+    fade_time: z.number().int().min(0).optional().describe("Intensity fade time in seconds"),
+    attributes: z.record(z.string(), z.number().int()).optional().describe("Raw attribute overrides {attr: value}"),
+    clear_first: z.boolean().default(true).describe("Clear the programmer first (default true)"),
+  },
+  async (a) => {
+    // Resolve every name before sending anything, so a typo sends nothing.
+    const groupIds = (a.groups ?? []).map((g) => resolveId("group", g));
+    const colourId = a.colour !== undefined ? resolveId("colour", a.colour) : undefined;
+    const positionId = a.position !== undefined ? resolveId("position", a.position) : undefined;
+    const beamId = a.beam !== undefined ? resolveId("beam", a.beam) : undefined;
+
+    const cmds: string[] = [];
+    const desc: string[] = [];
+    if (a.clear_first) { cmds.push("9H"); desc.push("cleared"); }
+
+    if (groupIds.length > 0) {
+      for (const g of groupIds) cmds.push(`4,${g}H`);
+      desc.push(`groups ${groupIds.join(", ")}`);
+    } else if (a.heads_start !== undefined) {
+      cmds.push(a.heads_end !== undefined ? `1,${a.heads_start},${a.heads_end}H` : `1,${a.heads_start}H`);
+      desc.push(`heads ${a.heads_start}${a.heads_end !== undefined ? `–${a.heads_end}` : ""}`);
+    } else if (a.all_heads) {
+      cmds.push(selectAllCommand());
+      desc.push("all heads");
+    } else if (a.clear_first) {
+      throw new Error("No selection: pass groups, heads_start or all_heads (the programmer was not changed).");
+    }
+
+    if (colourId !== undefined) { cmds.push(`11,${colourId}H`); desc.push(`colour ${colourId}`); }
+    if (positionId !== undefined) { cmds.push(`10,${positionId}H`); desc.push(`position ${positionId}`); }
+    if (beamId !== undefined) { cmds.push(`12,${beamId}H`); desc.push(`beam ${beamId}`); }
+    if (a.rgb) {
+      // MagicQ colour-mix attributes are Cyan/Magenta/Yellow (0–255), converted to RGB per fixture.
+      const [r, g, b] = a.rgb;
+      cmds.push(`6,16,${255 - r}H`, `6,17,${255 - g}H`, `6,18,${255 - b}H`);
+      desc.push(`rgb ${r},${g},${b}`);
+    }
+    if (a.intensity !== undefined) {
+      cmds.push(a.fade_time !== undefined ? `5,${a.intensity},${a.fade_time}H` : `5,${a.intensity}H`);
+      desc.push(`intensity ${a.intensity}%${a.fade_time !== undefined ? ` over ${a.fade_time}s` : ""}`);
+    }
+    for (const [attr, value] of Object.entries(a.attributes ?? {})) {
+      cmds.push(`6,${attr},${value}H`);
+      desc.push(`attr ${attr}=${value}`);
+    }
+
+    await sendCommands(cmds, config);
+    return ok(`Look live: ${desc.join("; ")}\nSent: ${cmds.join(" ")}`);
+  }
+);
+
 // ── Palette registry tools ────────────────────────────────────────────────────
 
 server.tool(
   "list_palettes",
-  "List all palettes in the local registry (colour, position, and beam). Use this at the start of a programming session to understand what palettes exist and which IDs to reference.",
+  "List all groups and palettes in the local registry (group, colour, position, beam). Use this at the start of a session — names listed here can be passed to apply_look.",
   {},
   async () => {
     const registry = loadRegistry();
@@ -536,14 +626,14 @@ server.tool(
 
 server.tool(
   "declare_palette",
-  "Register a palette that already exists on the console into the local registry. Use this for palettes created directly on the console (not through this server). Does not send any command to MagicQ.",
+  "Register a palette or group that already exists on the console into the local registry, so it can be referenced by name. Does not send any command to MagicQ.",
   {
-    type: z.enum(["colour", "position", "beam"]).describe("Palette type"),
-    palette_id: z.number().int().min(1).max(1024).describe("Palette ID on the console"),
-    name: z.string().min(1).describe("Human-readable name for this palette"),
+    type: z.enum(["colour", "position", "beam", "group"]).describe("Palette type, or 'group'"),
+    palette_id: z.number().int().min(1).max(1024).describe("Palette / group number on the console"),
+    name: z.string().min(1).describe("Name as shown on the console"),
   },
   async ({ type, palette_id, name }) => {
-    upsertPalette(type as PaletteType, palette_id, name);
+    upsertPalette(type as RegistryType, palette_id, name);
     return ok(`Registered ${type} palette ${palette_id} as "${name}"`);
   }
 );
@@ -624,6 +714,27 @@ server.tool(
   async ({ command }) => {
     await sendCommand(command, config);
     return ok(`Sent: ${command}`);
+  }
+);
+
+// ── Console feedback ──────────────────────────────────────────────────────────
+
+server.tool(
+  "get_feedback",
+  [
+    "Read what MagicQ has sent back to this server (OSC transmit / CREP tx), e.g. playback fader levels.",
+    "Requires MAGICQ_FEEDBACK_PORT on the server and MagicQ Setup → Network → OSC tx port/IP pointed at this machine.",
+    "mode 'latest' = last value per OSC address; 'recent' = message log in arrival order.",
+  ].join("\n"),
+  {
+    mode: z.enum(["latest", "recent"]).default("latest"),
+    filter: z.string().optional().describe("Only addresses containing this text, e.g. \"/pb\""),
+    limit: z.number().int().min(1).max(500).default(50).describe("Max messages for mode 'recent'"),
+  },
+  async ({ mode, filter, limit }) => {
+    const msgs = mode === "latest" ? getLatest(filter) : getRecent(limit, filter);
+    const rows = msgs.map((m) => `  ${m.at.slice(11, 23)}  ${m.address}  ${JSON.stringify(m.args)}`);
+    return ok([`Feedback ${feedbackStatus()}`, ...(rows.length ? rows : ["  (no messages)"])].join("\n"));
   }
 );
 

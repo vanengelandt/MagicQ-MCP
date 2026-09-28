@@ -1,6 +1,15 @@
 import { z } from "zod";
 import { sendCommand, sendCommands, delay, type MagicQConfig } from "./transport.js";
-import { upsertPalette, defaultName } from "./palette-registry.js";
+import { upsertPalette, defaultName, resolveId } from "./palette-registry.js";
+
+// Palette / group reference: console number or registry name.
+const Ref = z.union([z.number().int().min(1), z.string().min(1)]);
+
+// MagicQ's "All" key (32H) only works within an existing selection, so
+// "select everything" is a head range covering the whole show.
+export function selectAllCommand(): string {
+  return `1,1,${parseInt(process.env.MAGICQ_MAX_HEAD ?? "6145", 10)}H`;
+}
 
 // Each step is a discriminated union on `op`. The schema is passed directly to
 // the run_sequence tool so the LLM sees the exact shape required per operation.
@@ -8,17 +17,18 @@ export const StepSchema = z.discriminatedUnion("op", [
   // ── Programmer ────────────────────────────────────────────────────────────
   z.object({ op: z.literal("clear_programmer") }),
   z.object({ op: z.literal("select_group"),
-    group: z.number().int().min(1).max(200) }),
+    group: Ref.describe("Group number or registry name") }),
+  z.object({ op: z.literal("select_all_heads") }),
   z.object({ op: z.literal("select_heads"),
     start: z.number().int().min(1).max(6145),
     end: z.number().int().min(1).max(6145).optional() }),
   z.object({ op: z.literal("deselect_all_heads") }),
   z.object({ op: z.literal("include_colour_palette"),
-    palette_id: z.number().int().min(1).max(1024) }),
+    palette_id: Ref.describe("Palette number or registry name") }),
   z.object({ op: z.literal("include_position_palette"),
-    palette_id: z.number().int().min(1).max(1024) }),
+    palette_id: Ref.describe("Palette number or registry name") }),
   z.object({ op: z.literal("include_beam_palette"),
-    palette_id: z.number().int().min(1).max(1024) }),
+    palette_id: Ref.describe("Palette number or registry name") }),
   z.object({ op: z.literal("set_intensity"),
     level: z.number().int().min(0).max(100),
     fade_time: z.number().int().min(0).optional() }),
@@ -85,9 +95,16 @@ export async function executeSequence(
         log.push("clear_programmer");
         break;
 
-      case "select_group":
-        await sendCommand(`4,${step.group}H`, config);
-        log.push(`select_group(${step.group})`);
+      case "select_group": {
+        const id = resolveId("group", step.group);
+        await sendCommand(`4,${id}H`, config);
+        log.push(`select_group(${id})`);
+        break;
+      }
+
+      case "select_all_heads":
+        await sendCommand(selectAllCommand(), config);
+        log.push("select_all_heads");
         break;
 
       case "select_heads": {
@@ -102,20 +119,26 @@ export async function executeSequence(
         log.push("deselect_all_heads");
         break;
 
-      case "include_colour_palette":
-        await sendCommand(`11,${step.palette_id}H`, config);
-        log.push(`include_colour_palette(${step.palette_id})`);
+      case "include_colour_palette": {
+        const id = resolveId("colour", step.palette_id);
+        await sendCommand(`11,${id}H`, config);
+        log.push(`include_colour_palette(${id})`);
         break;
+      }
 
-      case "include_position_palette":
-        await sendCommand(`10,${step.palette_id}H`, config);
-        log.push(`include_position_palette(${step.palette_id})`);
+      case "include_position_palette": {
+        const id = resolveId("position", step.palette_id);
+        await sendCommand(`10,${id}H`, config);
+        log.push(`include_position_palette(${id})`);
         break;
+      }
 
-      case "include_beam_palette":
-        await sendCommand(`12,${step.palette_id}H`, config);
-        log.push(`include_beam_palette(${step.palette_id})`);
+      case "include_beam_palette": {
+        const id = resolveId("beam", step.palette_id);
+        await sendCommand(`12,${id}H`, config);
+        log.push(`include_beam_palette(${id})`);
         break;
+      }
 
       case "set_intensity": {
         const cmd = step.fade_time !== undefined
