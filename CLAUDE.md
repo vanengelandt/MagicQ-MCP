@@ -112,6 +112,7 @@ Prefer tools that express the full intent in one call:
 | Feedback | `get_console_state` (requests `/feedback/pb+exec`, returns fader levels + execute states), `get_feedback` (needs `MAGICQ_FEEDBACK_PORT` + MagicQ OSC tx) |
 | Read console (web server) | `read_programmer`, `read_window` (any of 26 windows: prog, outputs, patch, group, playbacks, cue_stack, cue_store, colour, …; `filter`, `columns`, `view`), `console_info` — needs MagicQ Setup → Web server Enabled (`MAGICQ_WEB_PORT`, 8080) |
 | Keypad (web server) | `web_keypad` — MagicQ command-line text + key (ENTER/CL/RC/IN/UN/NH/HL/</>), e.g. `1>10@50` ENTER |
+| Record onto playback | `record_playback` — OSC `/recpb<N>` → Autom → macro (RECORD + S N); checks the programmer, verifies via the Playbacks window, clears after. Set up per playback on the console. Exists now: PB2 (macro M2, Autom row 9) |
 | Resource | `palettes://registry` (MCP resource — read at session start) |
 | Reference | `attribute_list` (prints all attribute numbers) |
 | Escape hatch | `send_raw_command` |

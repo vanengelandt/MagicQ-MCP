@@ -952,6 +952,57 @@ server.tool(
   }
 );
 
+// ── Record onto a playback (OSC → Autom → keyboard macro) ────────────────────
+// The remote protocols cannot select a playback. On the console, record a
+// keyboard macro (RECORD, then the playback's S button) and add an Autom row:
+// Type OSC Message, P1 = /recpb<N>, Function Run macro, F1 = that macro.
+
+const recordAddress = process.env.MAGICQ_RECORD_OSC ?? "/recpb{pb}";
+
+function playbackCell(w: { rows: string[][] }, pb: number): string {
+  const re = new RegExp(`^PB${pb}(\\s|$)`);
+  return w.rows.flat().find((c) => re.test(c)) ?? `PB${pb}`;
+}
+
+server.tool(
+  "record_playback",
+  [
+    "Record the current programmer onto a playback by sending the OSC trigger of a console macro",
+    `(default address ${recordAddress.replace("{pb}", "<N>")}, set MAGICQ_RECORD_OSC). Needs, per playback, a MagicQ`,
+    "keyboard macro (RECORD + that playback's S button) and an Autom row OSC → Run macro. Build the look first",
+    "(apply_look / run_sequence). Verifies via the web server Playbacks window and clears the programmer after.",
+    "On a playback that already has cues MagicQ may show a merge/add prompt the macro cannot answer.",
+  ].join("\n"),
+  {
+    playback: z.number().int().min(1).max(202),
+    clear_after: z.boolean().default(true).describe("Clear the programmer after recording (default true)"),
+  },
+  async ({ playback, clear_after }) => {
+    const prog = await readWindow("prog", webConfig);
+    const heads = prog.rows.filter((r) => r.some((c) => c)).length;
+    if (!heads) return ok("Programmer is empty — nothing to record. Build a look first.");
+
+    const before = playbackCell(await readWindow("playbacks", webConfig), playback);
+    const address = recordAddress.replace("{pb}", String(playback));
+    await sendOscMessage(address, [], config);
+    await delay(1500);
+    const after = playbackCell(await readWindow("playbacks", webConfig), playback);
+
+    const changed = after !== before;
+    if (changed && clear_after) await sendCommand("9H", config);
+    return ok(
+      [
+        `Sent OSC ${address} with ${heads} head(s) in the programmer.`,
+        `Before: ${before || "(empty)"}   After: ${after || "(empty)"}`,
+        changed
+          ? `Recorded onto PB${playback}.${clear_after ? " Programmer cleared." : ""}`
+          : `PB${playback} did not change — check the Autom row (${address} → Run macro) and the macro on the console` +
+            " (read_window macros, view Autom), or a merge prompt on the console. Programmer left as is.",
+      ].join("\n")
+    );
+  }
+);
+
 // ── Reference resource ────────────────────────────────────────────────────────
 
 server.tool(
