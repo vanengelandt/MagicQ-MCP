@@ -250,7 +250,7 @@ Type aliases accepted: `colour`/`color`/`c`, `position`/`p`, `beam`/`b` (case-in
 ## Tips & Gotchas
 
 - **Including a colour palette colours every head stored in it**, ignoring the selection. For per-group colour use `apply_look` with `rgb` (attributes 16/17/18 = C/M/Y, 0–255).
-- Selecting a group after values were set **replaces** the selection; layer per-group looks with `apply_look` `clear_first: false`.
+- Selecting a group after values were set **replaces** the selection; layer per-group looks with `apply_look` `clear_first: false`. Selecting head **ranges** after values were set **adds** to the selection instead. For a fresh multi-range selection use `web_keypad` (`1>25+51>75` ENTER), then set attributes.
 - `all_heads` selects nothing after a clear — use `select_all_heads`.
 - Head numbers are MagicQ patch head numbers — prefer groups (`read_window` → `group` lists names and head counts).
 - Verify a look with `read_programmer`, or live output with `read_window` `outputs` + `filter` (e.g. a head type).
