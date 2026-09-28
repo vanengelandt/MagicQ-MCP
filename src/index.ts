@@ -15,6 +15,17 @@ import {
 import { importCsv } from "./csv-import.js";
 import { StepSchema, executeSequence, selectAllCommand } from "./sequence.js";
 import { startFeedbackListener, feedbackStatus, getLatest, getRecent, isListening } from "./feedback.js";
+import {
+  WINDOWS,
+  type WindowName,
+  KEYPAD_KEYS,
+  getWebConfig,
+  fetchPage,
+  parseWindow,
+  readWindow,
+  formatWindow,
+  keypad,
+} from "./web.js";
 
 const config = getConfig();
 
@@ -864,6 +875,80 @@ server.tool(
       if (ex.length) lines.push(`  range: ${ex[0].address} … ${ex[ex.length - 1].address}`);
     }
     return ok(lines.join("\n"));
+  }
+);
+
+// ── Web server (read console windows) ────────────────────────────────────────
+// Needs MagicQ Setup → Network → Web server Enabled (port MAGICQ_WEB_PORT, 8080).
+
+const webConfig = getWebConfig();
+const WindowEnum = z.enum(Object.keys(WINDOWS) as [WindowName, ...WindowName[]]);
+
+server.tool(
+  "console_info",
+  "Read MagicQ's web server front page: console name, time, software version, IP address and loaded show file.",
+  {},
+  async () => {
+    const w = parseWindow(await fetchPage("index.html", webConfig));
+    return ok([w.title, ...w.rows.map((r) => r.filter(Boolean).join(": "))].join("\n"));
+  }
+);
+
+server.tool(
+  "read_window",
+  [
+    "Read any MagicQ window via the console's web server — real console state, not just what this server sent.",
+    "Tables (prog, outputs, patch, cue, cue_stack, palette_view, setup, network, timeline, …) return only non-empty",
+    "columns; grid windows (group, colour, position, beam, cue_store, cue_stack_store, playbacks, page, fx, macros,",
+    "intensity) return the filled slots. Useful: prog = programmer, outputs = live values per head, patch = head",
+    "types/DMX addresses, group = group names + head counts, playbacks = what is on each playback,",
+    "cue_stack / cue = the stack/cue currently open on the console.",
+    "view switches the window's view (e.g. prog: Levels / Simple Times / FX / Adv Times; group: Groups / Heads) —",
+    "this also changes that window's view on the console.",
+  ].join("\n"),
+  {
+    window: WindowEnum,
+    filter: z.string().optional().describe("Only rows/cells containing this text, e.g. \"Rivale\" or \"301\""),
+    columns: z.array(z.string()).optional().describe("Only these columns (substring match), e.g. [\"Cyan\",\"Magenta\",\"Yellow\"]"),
+    view: z.string().optional().describe("View button number or label, e.g. \"2\" or \"Heads\""),
+    max_rows: z.number().int().min(1).max(2000).default(200),
+  },
+  async ({ window, filter, columns, view, max_rows }) => {
+    const w = await readWindow(window, webConfig, view);
+    return ok(formatWindow(w, { filter, columns, maxRows: max_rows }));
+  }
+);
+
+server.tool(
+  "read_programmer",
+  "Read what is in the MagicQ programmer right now (heads and their programmed values, empty columns dropped).",
+  {
+    filter: z.string().optional().describe("Only rows containing this text, e.g. a head type"),
+  },
+  async ({ filter }) => {
+    const w = await readWindow("prog", webConfig);
+    const rows = w.rows.filter((r) => r.some((c) => c));
+    if (!rows.length) return ok("Programmer is empty.");
+    return ok(formatWindow(w, { filter, maxRows: 500 }));
+  }
+);
+
+server.tool(
+  "web_keypad",
+  [
+    "Type on MagicQ's web Remote Keypad: enter command-line text, then press a key.",
+    "Text uses the keypad syntax: digits, '>' = THRU, '@' = AT, '#' = FULL, '/', '*', '+', '-', '.', 'GP' = group.",
+    "Keys: ENTER (execute the text), CL (clear), RC (record), IN (include), UN (update), NH (next head),",
+    "HL (highlight), '<' / '>' (previous/next). E.g. text \"1>10@50\" + ENTER = heads 1 thru 10 at 50%.",
+    "RC/UN write to the show — only use when the user asked to record/update. Verify with read_programmer.",
+  ].join("\n"),
+  {
+    text: z.string().default("").describe("Command-line text"),
+    key: z.enum(KEYPAD_KEYS).default("ENTER"),
+  },
+  async ({ text, key }) => {
+    const status = await keypad(text, key, webConfig);
+    return ok(`Keypad: "${text}" ${key}${status ? ` → ${status}` : ""}`);
   }
 );
 

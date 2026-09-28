@@ -110,6 +110,8 @@ Prefer tools that express the full intent in one call:
 | Registry | `list_palettes`, `declare_palette` (also `type: "group"`), `import_palettes_csv` |
 | OSC | `osc_playback` (level/go/flash/pause/release/cue, PB1–10), `osc_exec` (execute window), `blackout`, `osc_send` (any address) — to `MAGICQ_OSC_PORT` (8000) |
 | Feedback | `get_console_state` (requests `/feedback/pb+exec`, returns fader levels + execute states), `get_feedback` (needs `MAGICQ_FEEDBACK_PORT` + MagicQ OSC tx) |
+| Read console (web server) | `read_programmer`, `read_window` (any of 26 windows: prog, outputs, patch, group, playbacks, cue_stack, cue_store, colour, …; `filter`, `columns`, `view`), `console_info` — needs MagicQ Setup → Web server Enabled (`MAGICQ_WEB_PORT`, 8080) |
+| Keypad (web server) | `web_keypad` — MagicQ command-line text + key (ENTER/CL/RC/IN/UN/NH/HL/</>), e.g. `1>10@50` ENTER |
 | Resource | `palettes://registry` (MCP resource — read at session start) |
 | Reference | `attribute_list` (prints all attribute numbers) |
 | Escape hatch | `send_raw_command` |
@@ -121,4 +123,7 @@ Prefer tools that express the full intent in one call:
 - Deselect (`3H`, `2,a,bH`) had no visible effect. Not needed: selecting a group (`4,nH`) after setting values replaces the selection, so layer per-group looks with `apply_look` `clear_first: false`.
 - MagicQ PC ignores CREP whose source IP is its own. On the same machine give MagicQ its own IP and send from another local IP (`MAGICQ_LOCAL_IP`).
 - Head numbers are MagicQ patch head numbers, not visualiser fixture IDs — prefer groups.
+- Verify looks with `read_programmer` (what is programmed) or `read_window` `outputs` with `filter` (live values per head). `group` lists group names + head counts; `patch` gives head numbers, types and DMX addresses.
+- `read_window` `view` presses that window's view button, which also changes the view on the console.
+- `web_keypad` text syntax: `>` THRU, `@` AT, `#` FULL; `1@50` ENTER put head 1 at 50% in the programmer, `CL` cleared it (tested).
 - Tool results only confirm the packet was sent, not that MagicQ acted on it. Verify on the console, via `get_feedback`, or in the visualiser.
