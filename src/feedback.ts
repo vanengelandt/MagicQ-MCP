@@ -89,6 +89,10 @@ export function startFeedbackListener(port: number): void {
   });
 }
 
+export function isListening(): boolean {
+  return listening !== null;
+}
+
 export function feedbackStatus(): string {
   if (listening) return `listening on UDP ${listening.port}, ${latest.size} address(es) seen, ${log.length} message(s) logged`;
   if (listenError) return `listener failed: ${listenError}`;

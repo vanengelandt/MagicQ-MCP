@@ -108,7 +108,8 @@ Prefer tools that express the full intent in one call:
 | Include | `include_cue`, `include_colour_palette`, `include_position_palette`, `include_beam_palette` |
 | Fixture | `locate_heads`, `lamp_on`, `lamp_off`, `reset_heads` |
 | Registry | `list_palettes`, `declare_palette` (also `type: "group"`), `import_palettes_csv` |
-| Feedback | `get_feedback` (needs `MAGICQ_FEEDBACK_PORT` + MagicQ OSC tx) |
+| OSC | `osc_playback` (level/go/flash/pause/release/cue, PB1–10), `osc_exec` (execute window), `blackout`, `osc_send` (any address) — to `MAGICQ_OSC_PORT` (8000) |
+| Feedback | `get_console_state` (requests `/feedback/pb+exec`, returns fader levels + execute states), `get_feedback` (needs `MAGICQ_FEEDBACK_PORT` + MagicQ OSC tx) |
 | Resource | `palettes://registry` (MCP resource — read at session start) |
 | Reference | `attribute_list` (prints all attribute numbers) |
 | Escape hatch | `send_raw_command` |

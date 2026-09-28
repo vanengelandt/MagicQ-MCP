@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getConfig, sendCommand, sendCommands } from "./transport.js";
+import { getConfig, sendCommand, sendCommands, sendOscMessage, delay, type OscValue } from "./transport.js";
 import { ATTR } from "./attributes.js";
 import {
   loadRegistry,
@@ -14,7 +14,7 @@ import {
 } from "./palette-registry.js";
 import { importCsv } from "./csv-import.js";
 import { StepSchema, executeSequence, selectAllCommand } from "./sequence.js";
-import { startFeedbackListener, feedbackStatus, getLatest, getRecent } from "./feedback.js";
+import { startFeedbackListener, feedbackStatus, getLatest, getRecent, isListening } from "./feedback.js";
 
 const config = getConfig();
 
@@ -735,6 +735,135 @@ server.tool(
     const msgs = mode === "latest" ? getLatest(filter) : getRecent(limit, filter);
     const rows = msgs.map((m) => `  ${m.at.slice(11, 23)}  ${m.address}  ${JSON.stringify(m.args)}`);
     return ok([`Feedback ${feedbackStatus()}`, ...(rows.length ? rows : ["  (no messages)"])].join("\n"));
+  }
+);
+
+// ── OSC ───────────────────────────────────────────────────────────────────────
+// Needs MagicQ Setup → Network → OSC mode Rx (or Tx and Rx) with OSC rx port =
+// MAGICQ_OSC_PORT. MagicQ PC only handles OSC when unlocked (wing/interface).
+
+const OscArg = z.union([z.number(), z.string(), z.boolean()]);
+
+server.tool(
+  "osc_send",
+  [
+    "Send any OSC message to MagicQ (escape hatch for OSC addresses without a dedicated tool).",
+    "Integers are sent as int32, other numbers as float32. Examples: /pb/1 [100], /pb/1/go, /exec/3/201 [1],",
+    "/rpc [\"4,1H\"], or a custom address defined in MagicQ's MACRO → VIEW AUTOM window.",
+  ].join("\n"),
+  {
+    address: z.string().regex(/^\//, "must start with /").describe("OSC address, e.g. \"/pb/1/go\""),
+    args: z.array(OscArg).default([]).describe("Arguments, e.g. [100], [0.5] or [\"text\"]"),
+  },
+  async ({ address, args }) => {
+    await sendOscMessage(address, args, config);
+    return ok(`OSC sent: ${address}${args.length ? " " + JSON.stringify(args) : ""}`);
+  }
+);
+
+server.tool(
+  "osc_playback",
+  [
+    "Control playbacks via OSC (MagicQ built-in /pb addresses, playbacks 1–10 only).",
+    "action: level (value 0–100), go, flash (value 0 = off, else on), pause, release, cue (value = cue id, e.g. 2.5).",
+    "Use get_console_state afterwards to read the resulting fader levels.",
+  ].join("\n"),
+  {
+    playbacks: z.array(z.number().int().min(1).max(10)).min(1).describe("Playback numbers 1–10"),
+    action: z.enum(["level", "go", "flash", "pause", "release", "cue"]),
+    value: z.number().min(0).optional().describe("level 0–100, flash 0/1, or cue id for action 'cue'"),
+  },
+  async ({ playbacks, action, value }) => {
+    if ((action === "level" || action === "cue") && value === undefined) {
+      return ok(`action '${action}' needs a value`);
+    }
+    const sent: string[] = [];
+    for (const pb of playbacks) {
+      let address = `/pb/${pb}/${action}`;
+      let args: OscValue[] = [];
+      if (action === "level") {
+        address = `/pb/${pb}`;
+        args = [Math.round(Math.min(value!, 100))];
+      } else if (action === "flash") {
+        args = [value === 0 ? 0 : 1];
+      } else if (action === "cue") {
+        address = `/pb/${pb}/${value}`;
+      }
+      await sendOscMessage(address, args, config);
+      sent.push(`${address}${args.length ? " " + args.join(",") : ""}`);
+    }
+    return ok(`OSC sent: ${sent.join("  ")}`);
+  }
+);
+
+server.tool(
+  "osc_exec",
+  [
+    "Control a button, fader or encoder in MagicQ's Execute Window via OSC (/exec/<page>/<item>).",
+    "item = box number, grid reference like \"4x3\", or execute item name. page = execute grid 1–10 or name (optional).",
+    "value: omit = activate; 0 = release / lower encoder; 1 = activate / raise encoder; 0–100 = fader level.",
+    "get_console_state lists the execute addresses MagicQ reports.",
+  ].join("\n"),
+  {
+    item: z.union([z.number().int().min(1), z.string().min(1)]),
+    page: z.union([z.number().int().min(1), z.string().min(1)]).optional(),
+    value: z.number().int().min(0).max(100).optional(),
+  },
+  async ({ item, page, value }) => {
+    const address = page !== undefined ? `/exec/${page}/${item}` : `/exec/${item}`;
+    const args = value !== undefined ? [value] : [];
+    await sendOscMessage(address, args, config);
+    return ok(`OSC sent: ${address}${args.length ? " " + args[0] : ""}`);
+  }
+);
+
+server.tool(
+  "blackout",
+  "Turn MagicQ's DBO (dead blackout) on or off via OSC /dbo.",
+  { on: z.boolean().describe("true = blackout on, false = off") },
+  async ({ on }) => {
+    // MagicQ /dbo: 0 turns blackout on, non-zero turns it off.
+    await sendOscMessage("/dbo", [on ? 0 : 1], config);
+    return ok(`Blackout ${on ? "ON" : "OFF"} (OSC /dbo ${on ? 0 : 1})`);
+  }
+);
+
+server.tool(
+  "get_console_state",
+  [
+    "Ask MagicQ (OSC /feedback/...) to transmit the current playback and/or execute states, then report them.",
+    "This also turns on MagicQ's continuous feedback, so later get_feedback calls stay current.",
+    "Needs MAGICQ_FEEDBACK_PORT = MagicQ's OSC tx port and OSC mode 'Tx and Rx'.",
+  ].join("\n"),
+  {
+    what: z.enum(["pb", "exec", "pb+exec"]).default("pb+exec"),
+    wait_ms: z.number().int().min(100).max(5000).default(800).describe("How long to wait for replies"),
+  },
+  async ({ what, wait_ms }) => {
+    if (!isListening()) return ok(`Cannot read state: feedback ${feedbackStatus()}`);
+    const since = new Date().toISOString();
+    await sendOscMessage(`/feedback/${what}`, [], config);
+    await delay(wait_ms);
+    const lines: string[] = [];
+    if (what !== "exec") {
+      const pbs = getLatest("/pb/").filter((m) => /^\/pb\/\d+$/.test(m.address));
+      lines.push("Playbacks (fader level):");
+      for (const m of pbs) {
+        const v = typeof m.args[0] === "number" ? m.args[0] : 0;
+        const pct = Math.round(Math.min(Math.max(v, 0), 1) * 100);
+        const stale = m.at < since ? "  (no fresh reply)" : "";
+        lines.push(`  PB${m.address.slice(4).padEnd(3)}${String(pct).padStart(4)}%${stale}`);
+      }
+      if (!pbs.length) lines.push("  (no reply)");
+    }
+    if (what !== "pb") {
+      const ex = getLatest("/exec/");
+      const active = ex.filter((m) => typeof m.args[0] === "number" && m.args[0] > 0);
+      lines.push(`Execute items: ${ex.length} reported, ${active.length} active`);
+      for (const m of active) lines.push(`  ${m.address}  ${JSON.stringify(m.args)}`);
+      if (ex.length) lines.push(`  range: ${ex[0].address} … ${ex[ex.length - 1].address}`);
+    }
+    return ok(lines.join("\n"));
   }
 );
 

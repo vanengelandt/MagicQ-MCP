@@ -11,6 +11,8 @@ export interface MagicQConfig {
   // Local address to send from. MagicQ PC ignores CREP whose source IP equals
   // its own, so on the same machine give MagicQ one IP and send from another.
   localIp?: string;
+  // MagicQ OSC receive port (Setup → Network → OSC rx port) for the OSC tools.
+  oscPort: number;
 }
 
 export function getConfig(): MagicQConfig {
@@ -20,6 +22,7 @@ export function getConfig(): MagicQConfig {
     mode: (process.env.MAGICQ_TRANSPORT ?? "udp") as TransportMode,
     commandDelayMs: parseInt(process.env.MAGICQ_CMD_DELAY_MS ?? "75", 10),
     localIp: process.env.MAGICQ_LOCAL_IP || undefined,
+    oscPort: parseInt(process.env.MAGICQ_OSC_PORT ?? "8000", 10),
   };
 }
 
@@ -48,11 +51,43 @@ function oscString(s: string): Buffer {
   return buf;
 }
 
+export type OscValue = number | string | boolean;
+
+// Encode an OSC 1.0 message. Integers go out as int32 ("i"), other numbers as
+// float32 ("f"), booleans as T/F, strings as "s".
+export function oscMessage(address: string, args: OscValue[] = []): Buffer {
+  let tags = ",";
+  const data: Buffer[] = [];
+  for (const a of args) {
+    if (typeof a === "boolean") {
+      tags += a ? "T" : "F";
+    } else if (typeof a === "string") {
+      tags += "s";
+      data.push(oscString(a));
+    } else {
+      const b = Buffer.alloc(4);
+      if (Number.isInteger(a)) {
+        tags += "i";
+        b.writeInt32BE(a);
+      } else {
+        tags += "f";
+        b.writeFloatBE(a);
+      }
+      data.push(b);
+    }
+  }
+  return Buffer.concat([oscString(address), oscString(tags), ...data]);
+}
+
+// Send an OSC message to MagicQ's OSC receive port (MAGICQ_OSC_PORT).
+export function sendOscMessage(address: string, args: OscValue[], config: MagicQConfig): Promise<void> {
+  return sendUdp(oscMessage(address, args), { ...config, port: config.oscPort });
+}
+
 // Wrap a CREP command in an OSC "/rpc" message. MagicQ PC ignores raw CREP
 // sent from the same machine, but accepts it via OSC (default port 8000).
 function sendOsc(cmd: string, config: MagicQConfig): Promise<void> {
-  const packet = Buffer.concat([oscString("/rpc"), oscString(",s"), oscString(cmd)]);
-  return sendUdp(packet, config);
+  return sendUdp(oscMessage("/rpc", [cmd]), config);
 }
 
 function sendTcp(cmd: string, config: MagicQConfig): Promise<void> {
