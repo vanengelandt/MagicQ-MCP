@@ -971,7 +971,7 @@ server.tool(
     `(default address ${recordAddress.replace("{pb}", "<N>")}, set MAGICQ_RECORD_OSC). Needs, per playback, a MagicQ`,
     "keyboard macro (RECORD + that playback's S button) and an Autom row OSC → Run macro. Build the look first",
     "(apply_look / run_sequence). Verifies via the web server Playbacks window and clears the programmer after.",
-    "On a playback that already has cues MagicQ may show a merge/add prompt the macro cannot answer.",
+    "Only records onto an EMPTY playback: if the playback already holds a cue stack it does nothing.",
   ].join("\n"),
   {
     playback: z.number().int().min(1).max(202),
@@ -983,6 +983,9 @@ server.tool(
     if (!heads) return ok("Programmer is empty — nothing to record. Build a look first.");
 
     const before = playbackCell(await readWindow("playbacks", webConfig), playback);
+    if (before.trim() !== `PB${playback}`) {
+      return ok(`PB${playback} already has a cue stack (${before}) — not recording. Only empty playbacks are recorded.`);
+    }
     const address = recordAddress.replace("{pb}", String(playback));
     await sendOscMessage(address, [], config);
     await delay(1500);
