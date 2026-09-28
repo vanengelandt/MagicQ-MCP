@@ -126,4 +126,5 @@ Prefer tools that express the full intent in one call:
 - Verify looks with `read_programmer` (what is programmed) or `read_window` `outputs` with `filter` (live values per head). `group` lists group names + head counts; `patch` gives head numbers, types and DMX addresses.
 - `read_window` `view` presses that window's view button, which also changes the view on the console.
 - `web_keypad` text syntax: `>` THRU, `@` AT, `#` FULL; `1@50` ENTER put head 1 at 50% in the programmer, `CL` cleared it (tested).
+- Recording onto a playback remotely did NOT work: `web_keypad` `2/1` + RC, and `2/1` + ENTER, left PB2 empty (the manual's playback/cue + RECORD + ENTER syntax). Record onto a playback on the console (REC + the playback's S button).
 - Tool results only confirm the packet was sent, not that MagicQ acted on it. Verify on the console, via `get_feedback`, or in the visualiser.
