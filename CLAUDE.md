@@ -117,7 +117,7 @@ Prefer tools that express the full intent in one call:
 
 - `all_heads` (32H) is MagicQ's "All" key: it only re-selects within the current selection, so after `clear_programmer` it selects nothing. Use `select_all_heads` (head range 1..MAGICQ_MAX_HEAD).
 - Including a palette (`11,nH` etc.) applies it to every head stored in the palette, ignoring the selection. For per-group colour set attributes on the selection: 16/17/18 = Cyan/Magenta/Yellow, 0–255 (red = 0,255,255) — `apply_look` `rgb` does this.
-- Deselect (`3H`, `2,a,bH`) had no visible effect; start each look from `clear_programmer` and select groups (`4,nH`), which works.
+- Deselect (`3H`, `2,a,bH`) had no visible effect. Not needed: selecting a group (`4,nH`) after setting values replaces the selection, so layer per-group looks with `apply_look` `clear_first: false`.
 - MagicQ PC ignores CREP whose source IP is its own. On the same machine give MagicQ its own IP and send from another local IP (`MAGICQ_LOCAL_IP`).
 - Head numbers are MagicQ patch head numbers, not visualiser fixture IDs — prefer groups.
 - Tool results only confirm the packet was sent, not that MagicQ acted on it. Verify on the console, via `get_feedback`, or in the visualiser.
